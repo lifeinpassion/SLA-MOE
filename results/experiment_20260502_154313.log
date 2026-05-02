@@ -1,0 +1,91 @@
+2026-05-02 15:43:13,975 - INFO - Device: mps
+2026-05-02 15:43:13,976 - INFO - Experiments to run: ['eeg_eog_emg_quick']
+2026-05-02 15:43:13,976 - INFO - Baselines: ['simple_cnn', 'lms']
+2026-05-02 15:43:13,976 - INFO - Loading EEGdenoiseNet from data
+2026-05-02 15:43:14,006 - INFO - Data shapes: EEG=(3400, 512), EOG=(3400, 512), EMG=(3400, 512)
+2026-05-02 15:43:14,006 - INFO - ============================================================
+2026-05-02 15:43:14,006 - INFO - Experiment: eeg_eog_emg_quick
+2026-05-02 15:43:14,006 - INFO -   SNR sweep: [-3.0]
+2026-05-02 15:43:14,006 - INFO -   Seeds:     [40, 41]
+2026-05-02 15:43:14,006 - INFO -   Folds:     2 (subject-grouped)
+2026-05-02 15:43:14,007 - INFO - ============================================================
+2026-05-02 15:43:14,009 - INFO - Subject-grouped K-fold (2 folds) over 67 subjects
+2026-05-02 15:43:14,009 - INFO - [eeg_eog_emg] SNR=-3.0 dB | seed=40 | fold=1/2
+2026-05-02 15:43:14,194 - INFO - ICA fitted successfully with 4 components
+2026-05-02 15:43:14,204 - INFO - Starting ICA-based self-learning pre-training phase...
+2026-05-02 15:44:22,920 - INFO - Pre-training Epoch 0: Expert losses: [0.266585537425752, 0.46637471217029497, 0.43371068081765807, 0.5551326123048674]
+2026-05-02 15:46:36,494 - INFO - Pre-training Epoch 2: Expert losses: [0.08787568384465182, 0.24224748645188673, 0.23209945829409473, 0.34217669660190364]
+2026-05-02 15:48:49,998 - INFO - Pre-training Epoch 4: Expert losses: [0.06648169507114392, 0.1978063369696995, 0.21465573811306143, 0.31942563911653915]
+2026-05-02 15:48:50,000 - INFO - ICA-based self-learning pre-training completed!
+2026-05-02 15:48:50,002 - INFO - Starting main training phase with ICA pre-trained experts...
+2026-05-02 15:49:33,932 - INFO - Epoch 0, Main Loss: 0.103234, LB Loss: 65549.068396
+2026-05-02 15:51:01,244 - INFO - Epoch 2, Main Loss: 0.086384, LB Loss: 65536.076209
+2026-05-02 15:52:29,020 - INFO - Epoch 4, Main Loss: 0.080580, LB Loss: 65536.102005
+2026-05-02 15:53:56,676 - INFO - Epoch 6, Main Loss: 0.075615, LB Loss: 65536.150206
+2026-05-02 15:55:24,937 - INFO - Epoch 8, Main Loss: 0.068732, LB Loss: 65536.009950
+2026-05-02 15:56:27,993 - WARNING - Baseline SimpleCNN does not accept device=; using legacy call.
+2026-05-02 15:56:38,371 - INFO - Epoch 0, Loss: 0.494280
+2026-05-02 15:58:20,180 - INFO - Epoch 10, Loss: 0.348031
+2026-05-02 16:00:02,507 - INFO - Epoch 20, Loss: 0.341512
+2026-05-02 16:01:44,745 - INFO - Epoch 30, Loss: 0.337926
+2026-05-02 16:03:27,815 - INFO - Epoch 40, Loss: 0.335403
+2026-05-02 16:05:20,340 - INFO - [eeg_eog_emg] SNR=-3.0 dB | seed=40 | fold=2/2
+2026-05-02 16:05:20,872 - INFO - ICA fitted successfully with 4 components
+2026-05-02 16:05:20,882 - INFO - Starting ICA-based self-learning pre-training phase...
+2026-05-02 16:06:29,097 - INFO - Pre-training Epoch 0: Expert losses: [0.2890216832837233, 0.493934486921017, 0.5508349331525656, 0.5198744306197534]
+2026-05-02 16:08:42,958 - INFO - Pre-training Epoch 2: Expert losses: [0.09855933057574126, 0.24707042225278342, 0.23484432639983985, 0.3592727075402553]
+2026-05-02 16:10:59,894 - INFO - Pre-training Epoch 4: Expert losses: [0.07166183553636074, 0.18858090358284804, 0.21415811289961523, 0.33478108449624133]
+2026-05-02 16:10:59,896 - INFO - ICA-based self-learning pre-training completed!
+2026-05-02 16:10:59,898 - INFO - Starting main training phase with ICA pre-trained experts...
+2026-05-02 16:11:44,827 - INFO - Epoch 0, Main Loss: 0.107489, LB Loss: 65673.676683
+2026-05-02 16:13:15,110 - INFO - Epoch 2, Main Loss: 0.082789, LB Loss: 65536.444712
+2026-05-02 16:14:48,523 - INFO - Epoch 4, Main Loss: 0.070910, LB Loss: 65536.201923
+2026-05-02 16:16:18,949 - INFO - Epoch 6, Main Loss: 0.063807, LB Loss: 65536.043119
+2026-05-02 16:17:47,028 - INFO - Epoch 8, Main Loss: 0.060484, LB Loss: 65536.028846
+2026-05-02 16:18:52,254 - WARNING - Baseline SimpleCNN does not accept device=; using legacy call.
+2026-05-02 16:19:03,465 - INFO - Epoch 0, Loss: 0.476190
+2026-05-02 16:20:56,282 - INFO - Epoch 10, Loss: 0.338310
+2026-05-02 16:22:57,028 - INFO - Epoch 20, Loss: 0.331100
+2026-05-02 16:24:58,200 - INFO - Epoch 30, Loss: 0.327538
+2026-05-02 16:26:54,675 - INFO - Epoch 40, Loss: 0.323837
+2026-05-02 16:28:58,146 - INFO - [eeg_eog_emg] SNR=-3.0 dB | seed=41 | fold=1/2
+2026-05-02 16:28:58,659 - INFO - ICA fitted successfully with 4 components
+2026-05-02 16:28:58,668 - INFO - Starting ICA-based self-learning pre-training phase...
+2026-05-02 16:30:06,931 - INFO - Pre-training Epoch 0: Expert losses: [0.25954994545230325, 0.4876585636498793, 0.42616317744524973, 0.6757708855395047]
+2026-05-02 16:32:22,936 - INFO - Pre-training Epoch 2: Expert losses: [0.09163155195847997, 0.23924737409600672, 0.23394400921632658, 0.4068979322910309]
+2026-05-02 16:34:39,066 - INFO - Pre-training Epoch 4: Expert losses: [0.06141337752342224, 0.1945293275815136, 0.21980806257364885, 0.347296249754024]
+2026-05-02 16:34:39,068 - INFO - ICA-based self-learning pre-training completed!
+2026-05-02 16:34:39,070 - INFO - Starting main training phase with ICA pre-trained experts...
+2026-05-02 16:35:23,472 - INFO - Epoch 0, Main Loss: 0.119104, LB Loss: 65602.003243
+2026-05-02 16:36:52,112 - INFO - Epoch 2, Main Loss: 0.088858, LB Loss: 65536.194575
+2026-05-02 16:38:21,039 - INFO - Epoch 4, Main Loss: 0.081051, LB Loss: 65536.029334
+2026-05-02 16:39:49,802 - INFO - Epoch 6, Main Loss: 0.074350, LB Loss: 65536.023806
+2026-05-02 16:41:18,434 - INFO - Epoch 8, Main Loss: 0.071552, LB Loss: 65536.030734
+2026-05-02 16:42:22,073 - WARNING - Baseline SimpleCNN does not accept device=; using legacy call.
+2026-05-02 16:42:33,030 - INFO - Epoch 0, Loss: 0.477328
+2026-05-02 16:44:16,104 - INFO - Epoch 10, Loss: 0.346193
+2026-05-02 16:45:58,457 - INFO - Epoch 20, Loss: 0.340777
+2026-05-02 16:47:41,083 - INFO - Epoch 30, Loss: 0.336234
+2026-05-02 16:49:24,607 - INFO - Epoch 40, Loss: 0.333582
+2026-05-02 16:51:14,761 - INFO - [eeg_eog_emg] SNR=-3.0 dB | seed=41 | fold=2/2
+2026-05-02 16:51:15,273 - INFO - ICA fitted successfully with 4 components
+2026-05-02 16:51:15,282 - INFO - Starting ICA-based self-learning pre-training phase...
+2026-05-02 16:52:22,119 - INFO - Pre-training Epoch 0: Expert losses: [0.2802210259609498, 0.4881445226761011, 0.5456616090467343, 0.6196463411817184]
+2026-05-02 16:54:35,747 - INFO - Pre-training Epoch 2: Expert losses: [0.10709716780827595, 0.2368092118547513, 0.23431171505497053, 0.3689075232698367]
+2026-05-02 16:56:49,319 - INFO - Pre-training Epoch 4: Expert losses: [0.06773262470960617, 0.1982741393148899, 0.22049747264155975, 0.3362441985652997]
+2026-05-02 16:56:49,320 - INFO - ICA-based self-learning pre-training completed!
+2026-05-02 16:56:49,322 - INFO - Starting main training phase with ICA pre-trained experts...
+2026-05-02 16:57:33,140 - INFO - Epoch 0, Main Loss: 0.109121, LB Loss: 65542.982497
+2026-05-02 16:58:59,961 - INFO - Epoch 2, Main Loss: 0.078413, LB Loss: 65536.057091
+2026-05-02 17:00:26,877 - INFO - Epoch 4, Main Loss: 0.069554, LB Loss: 65536.039588
+2026-05-02 17:01:53,862 - INFO - Epoch 6, Main Loss: 0.064567, LB Loss: 65536.021635
+2026-05-02 17:03:20,855 - INFO - Epoch 8, Main Loss: 0.061510, LB Loss: 65536.005709
+2026-05-02 17:04:22,784 - WARNING - Baseline SimpleCNN does not accept device=; using legacy call.
+2026-05-02 17:04:33,372 - INFO - Epoch 0, Loss: 0.457633
+2026-05-02 17:06:17,295 - INFO - Epoch 10, Loss: 0.336080
+2026-05-02 17:08:01,781 - INFO - Epoch 20, Loss: 0.329902
+2026-05-02 17:09:48,225 - INFO - Epoch 30, Loss: 0.326643
+2026-05-02 17:11:37,257 - INFO - Epoch 40, Loss: 0.322988
+2026-05-02 17:13:28,003 - INFO - Raw per-fold results -> results/eeg_eog_emg/raw_results.json
+2026-05-02 17:13:28,097 - INFO - Stats + LaTeX table written for eeg_eog_emg at -3.0 dB.
+2026-05-02 17:13:28,098 - INFO - All experiments complete. See results

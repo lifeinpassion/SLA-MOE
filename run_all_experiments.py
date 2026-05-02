@@ -191,6 +191,11 @@ def run_one_fold(experiment_type: str,
         logging.error(f"SLA-MoE failed at seed={seed}, snr={target_snr_db}: {e}")
 
     # ---- Baselines ----
+    # Inspect baseline call signatures once so we don't spam warnings every fold.
+    import inspect
+    train_accepts_device = "device" in inspect.signature(train_baseline_model).parameters
+    apply_accepts_device = "device" in inspect.signature(apply_baseline_model).parameters
+
     if baseline_cfgs:
         for key, bc in baseline_cfgs.items():
             try:
@@ -208,30 +213,18 @@ def run_one_fold(experiment_type: str,
                         denoised = filt(noisy_test, eog_test, emg_test, stds, means)
                 else:
                     model = _build_dl_baseline(bc, input_size=clean_n.shape[1])
+                    train_kw = {"device": device} if train_accepts_device else {}
+                    apply_kw = {"device": device} if apply_accepts_device else {}
                     model = train_baseline_model(
                         model, noisy_train, clean_train, eog_train, emg_train,
                         epochs=bc.epochs, batch_size=bc.batch_size, seed=seed,
-                        device=device,
+                        **train_kw,
                     )
                     denoised = apply_baseline_model(
                         model, noisy_test, stds, means, eog_test, emg_test,
-                        device=device,
+                        **apply_kw,
                     )
                 fold_results[bc.name] = compute_metrics(clean_test_denorm, denoised, noisy_test_denorm)
-            except TypeError:
-                # Older signatures of the baselines may not accept device=
-                # Fall back to the legacy call.
-                logging.warning(f"Baseline {bc.name} does not accept device=; using legacy call.")
-                if bc.model_type in {"wiener", "lms", "rls", "kalman"}:
-                    pass  # nothing to do, already failed
-                else:
-                    model = _build_dl_baseline(bc, input_size=clean_n.shape[1])
-                    model = train_baseline_model(
-                        model, noisy_train, clean_train, eog_train, emg_train,
-                        epochs=bc.epochs, batch_size=bc.batch_size, seed=seed)
-                    denoised = apply_baseline_model(
-                        model, noisy_test, stds, means, eog_test, emg_test)
-                    fold_results[bc.name] = compute_metrics(clean_test_denorm, denoised, noisy_test_denorm)
             except Exception as e:
                 logging.error(f"Baseline {bc.name} failed at seed={seed}, snr={target_snr_db}: {e}")
 

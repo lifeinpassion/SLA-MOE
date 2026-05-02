@@ -39,7 +39,7 @@ MoE-main/
 
 | Hardware                                | What you can do                                                          |
 |-----------------------------------------|--------------------------------------------------------------------------|
-| MacBook Air M1, 8 GB                    | `--mode quick` smoke runs only (~10 minutes). Not for paper figures.    |
+| MacBook Air M1, 8 GB                    | `--mode quick` smoke runs only (~90 minutes for 2 seeds × 2 folds × SimpleCNN baseline). Not for paper figures. |
 | Single consumer GPU (RTX 3060+)         | Full SNR sweep + 5-fold LOSO + 5 seeds, ~overnight per artifact scenario. |
 | Colab T4 (free) / Kaggle P100 (free)    | Full run for one scenario per session; chunk across sessions.            |
 | Colab Pro L4 / A100, university cluster | Full sweep + ablation + downstream BCI in a single day.                  |
@@ -92,8 +92,9 @@ chunked grouping (documented as a limitation in the paper).
 python run_all_experiments.py --mode quick
 ```
 
-Runs at one SNR (-3 dB), 2 seeds, 2 folds, ~10 minutes. Useful for verifying
-the pipeline works before launching the full sweep on Colab.
+Runs at one SNR (-3 dB), 2 seeds, 2 folds, with SimpleCNN + LMS baselines.
+**~90 minutes on an M1 Air**, mostly LSTM training in the SLA-MoE pre-training
+phase. Verifies the pipeline end-to-end before you launch the full sweep on Colab.
 
 ### Full paper sweep (run on Colab / Kaggle / GPU box)
 
