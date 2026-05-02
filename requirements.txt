@@ -1,0 +1,10 @@
+numpy>=1.23
+scipy>=1.10
+scikit-learn>=1.2
+torch>=2.1
+matplotlib>=3.7
+seaborn>=0.12
+# Optional, only for the BCI-IV-2a downstream evaluation:
+# moabb>=1.0
+# mne>=1.5
+# braindecode>=0.8
