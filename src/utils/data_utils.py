@@ -120,8 +120,21 @@ def preprocess_data(eeg_data: np.ndarray,
     eeg_normalized = scaler_eeg.fit_transform(eeg_data)
     eeg_means, eeg_stds = scaler_eeg.mean_, scaler_eeg.scale_
 
-    eog_normalized = scaler_eog.fit_transform(eog_data)
-    emg_normalized = scaler_emg.fit_transform(emg_data)
+    eog_full = scaler_eog.fit_transform(eog_data)
+    emg_full = scaler_emg.fit_transform(emg_data)
+
+    # EEGdenoiseNet ships unequal segment counts per artifact type
+    # (EEG=4514, EOG=3400, EMG=5598). The standard contamination protocol is
+    # to pair each EEG segment with a *randomly-drawn* EOG and EMG segment.
+    # We use a fixed RNG seed here so the pairing is deterministic across
+    # runs / folds at the same input SNR -- this is what makes the SNR sweep
+    # reproducible.
+    n_eeg = eeg_normalized.shape[0]
+    rng = np.random.RandomState(20260502)
+    eog_idx = rng.randint(0, eog_full.shape[0], size=n_eeg)
+    emg_idx = rng.randint(0, emg_full.shape[0], size=n_eeg)
+    eog_normalized = eog_full[eog_idx]
+    emg_normalized = emg_full[emg_idx]
 
     artifact = eog_normalized + emg_normalized
     noisy_eeg, _scale = contaminate(eeg_normalized, artifact,
@@ -149,7 +162,14 @@ def preprocess_eeg_eog(eeg_data: np.ndarray,
 
     eeg_normalized = scaler_eeg.fit_transform(eeg_data)
     eeg_means, eeg_stds = scaler_eeg.mean_, scaler_eeg.scale_
-    eog_normalized = scaler_eog.fit_transform(eog_data)
+    eog_full = scaler_eog.fit_transform(eog_data)
+
+    # Pair each EEG segment with a randomly-drawn EOG segment (EEGdenoiseNet
+    # has unequal segment counts per artifact type).
+    n_eeg = eeg_normalized.shape[0]
+    rng = np.random.RandomState(20260502)
+    eog_idx = rng.randint(0, eog_full.shape[0], size=n_eeg)
+    eog_normalized = eog_full[eog_idx]
 
     noisy_eeg, _scale = contaminate(eeg_normalized, eog_normalized,
                                     target_snr_db=target_snr_db,
@@ -176,7 +196,14 @@ def preprocess_eeg_emg(eeg_data: np.ndarray,
 
     eeg_normalized = scaler_eeg.fit_transform(eeg_data)
     eeg_means, eeg_stds = scaler_eeg.mean_, scaler_eeg.scale_
-    emg_normalized = scaler_emg.fit_transform(emg_data)
+    emg_full = scaler_emg.fit_transform(emg_data)
+
+    # Pair each EEG segment with a randomly-drawn EMG segment (EEGdenoiseNet
+    # has unequal segment counts per artifact type).
+    n_eeg = eeg_normalized.shape[0]
+    rng = np.random.RandomState(20260502)
+    emg_idx = rng.randint(0, emg_full.shape[0], size=n_eeg)
+    emg_normalized = emg_full[emg_idx]
 
     noisy_eeg, _scale = contaminate(eeg_normalized, emg_normalized,
                                     target_snr_db=target_snr_db,
