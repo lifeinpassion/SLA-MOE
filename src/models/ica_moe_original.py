@@ -497,10 +497,36 @@ def apply_rnn_moe_filter_ica(noisy_eeg: np.ndarray,
             return self.gate_probs if hasattr(self, 'gate_probs') else None
 
     def compute_load_balancing_loss(gate_probs):
-        router_probs = gate_probs.mean(dim=[0, 1])
-        router_load = gate_probs.sum(dim=[0, 1])
-        num_experts = router_probs.size(0)
-        loss = torch.sum(router_probs * router_load) * (num_experts ** 2)
+        """
+        Switch-Transformer-style load-balancing auxiliary loss
+        (Fedus et al., 2022, Eq. 4 -- 6).
+
+            L_lb = N * sum_e f_e * P_e
+
+        where
+            P_e = mean over (batch, time) of gate_probs[..., e]
+                  (mean gate probability for expert e)
+            f_e = mean over (batch, time) of 1{argmax_k gate_probs[..., k] == e}
+                  (fraction of tokens hard-routed to expert e)
+
+        Both P_e and f_e lie in [0, 1] and each sums to 1 over experts, so
+        L_lb lies in [1, N]. With N=4 the value at perfect balance is 1.
+
+        BUG-FIX NOTE: the previous implementation used `gate_probs.sum`
+        (over batch & time) for f_e, which inflated the loss by
+        B * T = 16384 and produced the spurious LB Loss ~ 65536 reported
+        during training. The previous numerical scale is preserved by
+        re-tuning `lb_coef` upstream if needed (see calling code).
+        """
+        # P_e: mean gate probability per expert
+        P = gate_probs.mean(dim=[0, 1])              # (E,)
+        # f_e: fraction of (batch, time) tokens whose argmax is expert e
+        hard = gate_probs.argmax(dim=-1)             # (B, T)
+        E = P.size(0)
+        f = torch.zeros_like(P)
+        for e in range(E):
+            f[e] = (hard == e).float().mean()
+        loss = E * torch.sum(f * P)
         return loss
 
     # ICA-BASED SELF-LEARNING PRE-TRAINING PHASE
