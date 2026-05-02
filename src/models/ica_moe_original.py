@@ -23,12 +23,18 @@ def apply_rnn_moe_filter_ica(noisy_eeg: np.ndarray,
                               emg_normalized: np.ndarray,
                               eeg_stds: np.ndarray,
                               eeg_means: np.ndarray,
-                              seed: int = 40) -> np.ndarray:
+                              seed: int = 40,
+                              device=None) -> np.ndarray:
     """
     Apply Classical Recurrent Neural Network with Mixture of Experts (RNN-MoE) filter to EEG data.
     This version uses ICA-based self-learning pre-training for expert specialization.
 
-    This is the ORIGINAL best-performing model from initial_seeded.py.
+    GPU PORT (JBHI revision):
+      * Auto-detects device (cuda > mps > cpu); honors caller's `device=` if given.
+      * Model and all tensors live on `device` for the entire training+inference loop.
+      * ICA features are pre-computed ONCE for the full dataset (replaces per-batch
+        sklearn FastICA recompute, which previously dominated training time on
+        both M1 MPS and Colab T4).
 
     Args:
         noisy_eeg: Noisy EEG data.
@@ -38,9 +44,10 @@ def apply_rnn_moe_filter_ica(noisy_eeg: np.ndarray,
         eeg_stds: Standard deviations for denormalization.
         eeg_means: Means for denormalization.
         seed: Random seed for reproducibility (default: 40)
+        device: torch.device or string ('cuda'|'mps'|'cpu'); None auto-detects.
 
     Returns:
-        Filtered EEG data.
+        Filtered EEG data (numpy on CPU, denormalized).
     """
     # Set all random seeds for reproducibility
     OPTIMAL_SEED = seed
@@ -52,14 +59,27 @@ def apply_rnn_moe_filter_ica(noisy_eeg: np.ndarray,
     torch.backends.cudnn.deterministic = True
     torch.backends.cudnn.benchmark = False
 
+    # Device detection (cuda > mps > cpu)
+    if device is None:
+        if torch.cuda.is_available():
+            device = torch.device("cuda")
+        elif hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
+            device = torch.device("mps")
+        else:
+            device = torch.device("cpu")
+    elif isinstance(device, str):
+        device = torch.device(device)
+    logging.info(f"SLA-MoE applier using device: {device}")
+
     hidden_size = 128
     sequence_length = noisy_eeg.shape[1]
     num_experts = 4
 
-    # Convert inputs to tensors
-    noisy_eeg_tensor = torch.FloatTensor(noisy_eeg)
-    eog_tensor = torch.FloatTensor(eog_normalized)
-    emg_tensor = torch.FloatTensor(emg_normalized)
+    # Convert inputs to tensors and move to device
+    noisy_eeg_tensor = torch.FloatTensor(noisy_eeg).to(device)
+    eog_tensor = torch.FloatTensor(eog_normalized).to(device)
+    emg_tensor = torch.FloatTensor(emg_normalized).to(device)
+    clean_tensor_full = torch.FloatTensor(eeg_normalized).to(device)
 
     class ICADecomposer:
         """Helper class for ICA decomposition operations."""
@@ -206,8 +226,69 @@ def apply_rnn_moe_filter_ica(noisy_eeg: np.ndarray,
             self.clean_eeg = clean_eeg
             self.ica_decomposer = ICADecomposer(n_components=4)
             self.component_characteristics = []
+            self.ica_features_cache = None   # (N, T, n_components) on `device`
 
             self._fit_ica()
+            self._precompute_ica_features_for_dataset()
+
+        def _precompute_ica_features_for_dataset(self):
+            """
+            One-time computation of ICA features for ALL noisy_eeg segments.
+            Runs the windowed CPU FastICA pipeline once, builds a (N, T, n_components)
+            tensor, and moves it to `device`. Both the pretrainer and the main
+            RNNMoEFilter look up batches from this cache via indexing, eliminating
+            the per-batch FastICA recompute that dominated training time.
+            """
+            if not self.ica_decomposer.fitted:
+                logging.warning("ICA not fitted; cache will be all zeros.")
+                self.ica_features_cache = torch.zeros(
+                    self.noisy_eeg.shape[0],
+                    self.noisy_eeg.shape[1],
+                    self.ica_decomposer.n_components,
+                    device=device,
+                )
+                return
+
+            N, T = self.noisy_eeg.shape
+            n_comp = self.ica_decomposer.n_components
+            window_size = min(64, T)
+            stride = 8
+            cache_np = np.zeros((N, T, n_comp), dtype=np.float32)
+
+            # Move noisy_eeg to CPU once for the windowed numpy ops
+            data_cpu = self.noisy_eeg.detach().cpu().numpy()
+
+            logging.info(f"Pre-computing ICA features for {N} segments (one-time)...")
+            for i in range(N):
+                signal = data_cpu[i]
+                weights = np.zeros((T, n_comp), dtype=np.float32)
+                counts = np.zeros(T, dtype=np.float32)
+
+                for j in range(0, T - window_size + 1, stride):
+                    window = signal[j:j + window_size] * np.hanning(window_size)
+                    components = self.ica_decomposer.decompose(window)
+                    if components is None:
+                        continue
+                    for comp_idx in range(min(n_comp, components.shape[0])):
+                        comp = components[comp_idx]
+                        comp_std = np.std(comp) + 1e-10
+                        comp_normalized = comp / comp_std
+                        for k in range(j, min(j + window_size, T)):
+                            local_idx = int((k - j) * len(comp) / window_size)
+                            weight = 1.0 - abs(2.0 * (k - j) / window_size - 1.0)
+                            weights[k, comp_idx] += weight * comp_normalized[min(local_idx, len(comp) - 1)]
+                            counts[k] += weight
+
+                nz = counts > 0
+                if nz.any():
+                    cache_np[i, nz] = weights[nz] / counts[nz, None]
+
+            cache_t = torch.from_numpy(cache_np).to(device)
+            cache_t = F.normalize(cache_t, p=2, dim=-1)
+            self.ica_features_cache = cache_t
+            # Also share with the decomposer so RNNMoEFilter can use it
+            self.ica_decomposer.features_cache = cache_t
+            logging.info(f"ICA features cache built, shape={tuple(cache_t.shape)}, device={cache_t.device}")
 
         def _fit_ica(self):
             n_samples = min(500, len(self.noisy_eeg))
@@ -227,46 +308,48 @@ def apply_rnn_moe_filter_ica(noisy_eeg: np.ndarray,
                                    f"low_freq_power={characteristics['low_freq_power']:.2%}, "
                                    f"high_freq_power={characteristics['high_freq_power']:.2%}")
 
-        def compute_ica_features(self, signals):
+        def compute_ica_features(self, signals, batch_indices=None):
+            """
+            With the cache, this is a fast tensor lookup. If `batch_indices`
+            is provided we slice the cache directly. The legacy slow path
+            (no cache, recompute per batch) is preserved as a fallback.
+            """
+            if batch_indices is not None and self.ica_features_cache is not None:
+                if torch.is_tensor(batch_indices):
+                    batch_indices = batch_indices.detach().cpu().numpy()
+                return self.ica_features_cache[batch_indices]
+
+            # ---- legacy fallback (slow): compute on the fly ----
             batch_size, seq_len = signals.shape
             n_components = self.ica_decomposer.n_components
-            ica_features = torch.zeros(batch_size, seq_len, n_components)
-
+            ica_features = torch.zeros(batch_size, seq_len, n_components, device=signals.device)
             if not self.ica_decomposer.fitted:
                 return ica_features
 
+            window_size = min(64, seq_len)
+            stride = 8
             for i in range(batch_size):
-                signal = signals[i]
-
-                window_size = min(64, seq_len)
-                stride = 8
-
-                weights = np.zeros((seq_len, n_components))
-                counts = np.zeros(seq_len)
-
+                signal_np = signals[i].detach().cpu().numpy()
+                weights = np.zeros((seq_len, n_components), dtype=np.float32)
+                counts = np.zeros(seq_len, dtype=np.float32)
                 for j in range(0, seq_len - window_size + 1, stride):
-                    window = signal[j:j + window_size].cpu().numpy()
-                    window = window * np.hanning(len(window))
+                    window = signal_np[j:j + window_size] * np.hanning(window_size)
                     components = self.ica_decomposer.decompose(window)
-
-                    if components is not None:
-                        for comp_idx in range(n_components):
-                            if comp_idx < components.shape[0]:
-                                comp = components[comp_idx]
-                                comp_std = np.std(comp) + 1e-10
-                                comp_normalized = comp / comp_std
-
-                                for k in range(j, min(j + window_size, seq_len)):
-                                    if k < seq_len:
-                                        local_idx = int((k - j) * len(comp) / window_size)
-                                        weight = 1.0 - abs(2.0 * (k - j) / window_size - 1.0)
-                                        weights[k, comp_idx] += weight * comp_normalized[min(local_idx, len(comp)-1)]
-                                        counts[k] += weight
-
-                for k in range(seq_len):
-                    if counts[k] > 0:
-                        ica_features[i, k, :] = torch.FloatTensor(weights[k, :] / counts[k])
-
+                    if components is None:
+                        continue
+                    for comp_idx in range(min(n_components, components.shape[0])):
+                        comp = components[comp_idx]
+                        comp_std = np.std(comp) + 1e-10
+                        comp_normalized = comp / comp_std
+                        for k in range(j, min(j + window_size, seq_len)):
+                            local_idx = int((k - j) * len(comp) / window_size)
+                            weight = 1.0 - abs(2.0 * (k - j) / window_size - 1.0)
+                            weights[k, comp_idx] += weight * comp_normalized[min(local_idx, len(comp) - 1)]
+                            counts[k] += weight
+                nz = counts > 0
+                if nz.any():
+                    block = weights[nz] / counts[nz, None]
+                    ica_features[i, np.where(nz)[0], :] = torch.from_numpy(block).to(signals.device)
             ica_features = F.normalize(ica_features, p=2, dim=-1)
             return ica_features
 
@@ -367,7 +450,7 @@ def apply_rnn_moe_filter_ica(noisy_eeg: np.ndarray,
                     batch_emg = self.emg[batch_indices]
                     batch_clean = self.clean_eeg[batch_indices]
 
-                    ica_features = self.compute_ica_features(batch_noisy)
+                    ica_features = self.compute_ica_features(batch_noisy, batch_indices=batch_indices)
 
                     for expert_id, (expert, optimizer) in enumerate(zip(self.experts, optimizers)):
                         optimizer.zero_grad()
@@ -423,50 +506,53 @@ def apply_rnn_moe_filter_ica(noisy_eeg: np.ndarray,
             self.sparse_gate = True
             self.top_k = 2
 
-        def compute_ica_features(self, signals):
+        def compute_ica_features(self, signals, batch_indices=None):
+            """
+            Look up cached ICA features by indices. The cache is built once
+            by ICASelfLearningPretrainer and shared via ica_decomposer.features_cache.
+            Falls back to a slow per-batch compute if no cache or no indices.
+            """
+            cache = getattr(self.ica_decomposer, "features_cache", None)
+            if batch_indices is not None and cache is not None:
+                if torch.is_tensor(batch_indices):
+                    batch_indices = batch_indices.detach().cpu().numpy()
+                return cache[batch_indices]
+
             batch_size, seq_len = signals.shape
             n_components = self.ica_decomposer.n_components if self.ica_decomposer.fitted else 4
-            ica_features = torch.zeros(batch_size, seq_len, n_components)
-
+            ica_features = torch.zeros(batch_size, seq_len, n_components, device=signals.device)
             if not self.ica_decomposer.fitted:
                 return ica_features
 
+            window_size = min(64, seq_len)
+            stride = 8
             for i in range(batch_size):
-                signal = signals[i]
-                window_size = min(64, seq_len)
-                stride = 8
-
-                weights = np.zeros((seq_len, n_components))
-                counts = np.zeros(seq_len)
-
+                signal_np = signals[i].detach().cpu().numpy()
+                weights = np.zeros((seq_len, n_components), dtype=np.float32)
+                counts = np.zeros(seq_len, dtype=np.float32)
                 for j in range(0, seq_len - window_size + 1, stride):
-                    window = signal[j:j + window_size].cpu().numpy()
-                    window = window * np.hanning(len(window))
+                    window = signal_np[j:j + window_size] * np.hanning(window_size)
                     components = self.ica_decomposer.decompose(window)
-
-                    if components is not None:
-                        for comp_idx in range(n_components):
-                            if comp_idx < components.shape[0]:
-                                comp = components[comp_idx]
-                                comp_std = np.std(comp) + 1e-10
-                                comp_normalized = comp / comp_std
-
-                                for k in range(j, min(j + window_size, seq_len)):
-                                    if k < seq_len:
-                                        local_idx = int((k - j) * len(comp) / window_size)
-                                        weight = 1.0 - abs(2.0 * (k - j) / window_size - 1.0)
-                                        weights[k, comp_idx] += weight * comp_normalized[min(local_idx, len(comp)-1)]
-                                        counts[k] += weight
-
-                for k in range(seq_len):
-                    if counts[k] > 0:
-                        ica_features[i, k, :] = torch.FloatTensor(weights[k, :] / counts[k])
-
+                    if components is None:
+                        continue
+                    for comp_idx in range(min(n_components, components.shape[0])):
+                        comp = components[comp_idx]
+                        comp_std = np.std(comp) + 1e-10
+                        comp_normalized = comp / comp_std
+                        for k in range(j, min(j + window_size, seq_len)):
+                            local_idx = int((k - j) * len(comp) / window_size)
+                            weight = 1.0 - abs(2.0 * (k - j) / window_size - 1.0)
+                            weights[k, comp_idx] += weight * comp_normalized[min(local_idx, len(comp) - 1)]
+                            counts[k] += weight
+                nz = counts > 0
+                if nz.any():
+                    block = weights[nz] / counts[nz, None]
+                    ica_features[i, np.where(nz)[0], :] = torch.from_numpy(block).to(signals.device)
             ica_features = F.normalize(ica_features, p=2, dim=-1)
             return ica_features
 
-        def forward(self, x, eog, emg):
-            ica_features = self.compute_ica_features(x)
+        def forward(self, x, eog, emg, batch_indices=None):
+            ica_features = self.compute_ica_features(x, batch_indices=batch_indices)
             basic_features = torch.stack([x, eog, emg], dim=-1)
             gate_input = torch.cat([basic_features, ica_features], dim=-1)
 
@@ -535,10 +621,10 @@ def apply_rnn_moe_filter_ica(noisy_eeg: np.ndarray,
         noisy_eeg_tensor,
         eog_tensor,
         emg_tensor,
-        torch.FloatTensor(eeg_normalized)
+        clean_tensor_full,
     )
 
-    model = RNNMoEFilter(num_experts, pretrainer.ica_decomposer)
+    model = RNNMoEFilter(num_experts, pretrainer.ica_decomposer).to(device)
     pretrainer.experts = model.experts
     pretrainer.pretrain(epochs=5, batch_size=32)
 
@@ -569,9 +655,10 @@ def apply_rnn_moe_filter_ica(noisy_eeg: np.ndarray,
             batch_noisy = noisy_eeg_tensor[start_idx:end_idx]
             batch_eog = eog_tensor[start_idx:end_idx]
             batch_emg = emg_tensor[start_idx:end_idx]
-            batch_target = torch.FloatTensor(eeg_normalized[start_idx:end_idx])
+            batch_target = clean_tensor_full[start_idx:end_idx]
+            batch_indices = list(range(start_idx, end_idx))
 
-            output = model(batch_noisy, batch_eog, batch_emg)
+            output = model(batch_noisy, batch_eog, batch_emg, batch_indices=batch_indices)
             main_loss = criterion(output, batch_target)
 
             gate_probs = model.get_gate_probs()
@@ -595,12 +682,19 @@ def apply_rnn_moe_filter_ica(noisy_eeg: np.ndarray,
         if epoch % 2 == 0:
             logging.info(f"Epoch {epoch}, Main Loss: {avg_loss:.6f}, LB Loss: {avg_lb_loss:.6f}")
 
-    # Apply the model
+    # Apply the model -- batch the inference to keep activation memory bounded
     model.eval()
+    n_total = noisy_eeg_tensor.shape[0]
+    inference_batch = 64
+    outputs = []
     with torch.no_grad():
-        filtered_output = model(noisy_eeg_tensor, eog_tensor, emg_tensor)
-
-    filtered_output = filtered_output.numpy()
+        for s in range(0, n_total, inference_batch):
+            e = min(s + inference_batch, n_total)
+            indices = list(range(s, e))
+            out = model(noisy_eeg_tensor[s:e], eog_tensor[s:e], emg_tensor[s:e],
+                        batch_indices=indices)
+            outputs.append(out.detach().cpu())
+    filtered_output = torch.cat(outputs, dim=0).numpy()
     filtered_output = filtered_output * eeg_stds + eeg_means
 
     return filtered_output
@@ -611,7 +705,8 @@ def apply_rnn_moe_filter_ica_eog_only(noisy_eeg: np.ndarray,
                                        eog_normalized: np.ndarray,
                                        eeg_stds: np.ndarray,
                                        eeg_means: np.ndarray,
-                                       seed: int = 40) -> np.ndarray:
+                                       seed: int = 40,
+                                       device=None) -> np.ndarray:
     """
     Apply ICA-MoE filter for EEG+EOG denoising (no EMG).
 
@@ -631,7 +726,7 @@ def apply_rnn_moe_filter_ica_eog_only(noisy_eeg: np.ndarray,
 
     return apply_rnn_moe_filter_ica(
         noisy_eeg, eeg_normalized, eog_normalized, emg_normalized,
-        eeg_stds, eeg_means, seed
+        eeg_stds, eeg_means, seed, device=device,
     )
 
 
@@ -640,7 +735,8 @@ def apply_rnn_moe_filter_ica_emg_only(noisy_eeg: np.ndarray,
                                        emg_normalized: np.ndarray,
                                        eeg_stds: np.ndarray,
                                        eeg_means: np.ndarray,
-                                       seed: int = 40) -> np.ndarray:
+                                       seed: int = 40,
+                                       device=None) -> np.ndarray:
     """
     Apply ICA-MoE filter for EEG+EMG denoising (no EOG).
 
@@ -660,5 +756,5 @@ def apply_rnn_moe_filter_ica_emg_only(noisy_eeg: np.ndarray,
 
     return apply_rnn_moe_filter_ica(
         noisy_eeg, eeg_normalized, eog_normalized, emg_normalized,
-        eeg_stds, eeg_means, seed
+        eeg_stds, eeg_means, seed, device=device,
     )

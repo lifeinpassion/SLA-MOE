@@ -129,7 +129,7 @@ def _preprocess_for_experiment(experiment_type: str,
 def run_sla_moe(experiment_type: str,
                 noisy_train, clean_train, eog_train, emg_train,
                 noisy_test, clean_test, eog_test, emg_test,
-                stds, means, seed: int) -> np.ndarray:
+                stds, means, seed: int, device=None) -> np.ndarray:
     """Apply SLA-MoE on the test fold. Currently the underlying applier
     fits + applies in one pass on the test segment; for the rigorous fold
     split we pass only the test data (the existing implementation does
@@ -137,12 +137,12 @@ def run_sla_moe(experiment_type: str,
     train-then-eval."""
     if experiment_type == "eeg_eog":
         return apply_rnn_moe_filter_ica_eog_only(
-            noisy_test, clean_test, eog_test, stds, means, seed=seed)
+            noisy_test, clean_test, eog_test, stds, means, seed=seed, device=device)
     if experiment_type == "eeg_emg":
         return apply_rnn_moe_filter_ica_emg_only(
-            noisy_test, clean_test, emg_test, stds, means, seed=seed)
+            noisy_test, clean_test, emg_test, stds, means, seed=seed, device=device)
     return apply_rnn_moe_filter_ica(
-        noisy_test, clean_test, eog_test, emg_test, stds, means, seed=seed)
+        noisy_test, clean_test, eog_test, emg_test, stds, means, seed=seed, device=device)
 
 
 def run_one_fold(experiment_type: str,
@@ -185,7 +185,7 @@ def run_one_fold(experiment_type: str,
         denoised = run_sla_moe(experiment_type,
                                noisy_train, clean_train, eog_train, emg_train,
                                noisy_test, clean_test, eog_test, emg_test,
-                               stds, means, seed=seed)
+                               stds, means, seed=seed, device=device)
         fold_results[SLA_MOE_NAME] = compute_metrics(clean_test_denorm, denoised, noisy_test_denorm)
     except Exception as e:
         logging.error(f"SLA-MoE failed at seed={seed}, snr={target_snr_db}: {e}")
