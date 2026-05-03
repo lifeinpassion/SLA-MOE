@@ -254,10 +254,17 @@ def run_experiment_sweep(experiment_type: str,
                          data: Dict[str, np.ndarray],
                          baseline_cfgs: Dict[str, BaselineConfig],
                          device: torch.device,
-                         output_dir: Path) -> Dict[str, Any]:
+                         output_dir: Path,
+                         baselines_at_snr: float | None = None) -> Dict[str, Any]:
     """
     Outer loops: input SNR -> seed -> fold. Aggregates per-method per-metric
     arrays and persists per-(snr, seed, fold) raw measurements.
+
+    Args:
+        baselines_at_snr: if given, run baselines only at this single SNR;
+            SLA-MoE still runs at every SNR in cfg.snr_sweep_db. This is the
+            standard publishing setup -- baselines populate the headline Table II
+            at one SNR, while SLA-MoE generates the SNR sweep figure.
     """
     n_segments = data["eeg"].shape[0]
 
@@ -274,13 +281,21 @@ def run_experiment_sweep(experiment_type: str,
     all_results: Dict[str, List[Dict]] = {}  # method -> list of {snr, seed, fold, metric, value}
 
     for snr_db in cfg.snr_sweep_db:
+        # Decide whether to run baselines at this SNR.
+        run_baselines_here = (baselines_at_snr is None
+                              or abs(snr_db - baselines_at_snr) < 1e-6)
+        active_baseline_cfgs = baseline_cfgs if run_baselines_here else {}
+        if not run_baselines_here:
+            logging.info(f"[{experiment_type}] SNR={snr_db:.1f} dB -- SLA-MoE only "
+                         f"(baselines reserved for SNR={baselines_at_snr:.1f} dB)")
+
         for seed in cfg.seeds:
             for fold_idx, (train_idx, test_idx) in enumerate(folds):
                 logging.info(f"[{experiment_type}] SNR={snr_db:.1f} dB | seed={seed} | fold={fold_idx + 1}/{cfg.n_folds}")
                 fold_results = run_one_fold(
                     experiment_type, cfg, data, snr_db,
                     train_idx, test_idx, seed,
-                    baseline_cfgs, device,
+                    active_baseline_cfgs, device,
                 )
                 for method, metrics in fold_results.items():
                     rec = {"snr_db": snr_db, "seed": seed, "fold": fold_idx, **metrics}
@@ -358,6 +373,10 @@ def main():
     parser.add_argument("--no-baselines", action="store_true")
     parser.add_argument("--snr", type=float, default=None,
                         help="If given, run only this single input SNR (in dB)")
+    parser.add_argument("--baselines-at-snr", type=float, default=None,
+                        help="If given, run baselines only at this single SNR (SLA-MoE still "
+                             "runs the full sweep). Use this to populate Table II at one SNR while "
+                             "generating the SNR-sweep figure for SLA-MoE alone.")
     parser.add_argument("--device", choices=["auto", "cpu", "cuda", "mps"], default="auto")
     args = parser.parse_args()
 
@@ -409,7 +428,8 @@ def main():
             experiment_type = "eeg_eog_emg"
 
         all_results = run_experiment_sweep(
-            experiment_type, cfg, data, baseline_cfgs, device, output_dir)
+            experiment_type, cfg, data, baseline_cfgs, device, output_dir,
+            baselines_at_snr=args.baselines_at_snr)
         write_summary_artifacts(all_results, cfg, output_dir, experiment_type)
 
     logger.info("All experiments complete. See %s", output_dir)

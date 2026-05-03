@@ -139,8 +139,11 @@ class EEGDnet(nn.Module):
         )
 
         # Simple attention (non-local block simplified)
+        # Output channels MUST match `b`'s channels (base_channels * 8) so that
+        # `b = b * att` is shape-compatible. Previously this was * 4 which
+        # caused the runtime shape mismatch error.
         self.attention = nn.Sequential(
-            nn.Conv1d(base_channels * 8, base_channels * 4, kernel_size=1),
+            nn.Conv1d(base_channels * 8, base_channels * 8, kernel_size=1),
             nn.Softmax(dim=-1)
         )
 
