@@ -89,10 +89,12 @@ def main():
     out = Path(args.output_dir)
     save_stats_json(stats, out / "ablation_stats.json")
 
+    n_aligned = len(per_variant[REFERENCE].get("rmse", []))
     latex = build_latex_table(
         per_variant, stats, reference=REFERENCE, metric_order=METRIC_ORDER,
         caption=f"Ablation study at input SNR = {args.snr:.1f} dB on the EEG+EOG+EMG task. "
-                f"Mean $\\pm$ std over {len(sorted_keys)} (seed, fold) combinations. "
+                f"Mean $\\pm$ std over {n_aligned} (seed, fold) combinations "
+                f"(out of {len(all_keys)} total; some dropped due to non-finite metrics in some variant). "
                 "$\\dagger$ = Holm-significant difference vs full SLA-MoE.",
         label="tab:ablation",
     )
