@@ -71,33 +71,22 @@ def _apply_with_overrides(experiment_type: str,
                           noisy, clean, eog, emg, stds, means,
                           seed: int, overrides: Dict[str, Any]):
     """
-    Apply SLA-MoE with knob overrides. We call the existing applier function
-    after temporarily patching module-level attributes that the applier
-    reads. After the call we restore the originals.
-
-    NOTE: this is a pragmatic shim until the applier is refactored to take a
-    config dataclass directly. If you already refactored, replace the body of
-    this function with: `model = SLAMoE(**overrides); ... ; return model.predict(...)`.
+    Apply SLA-MoE with knob overrides. The applier now exposes ablation knobs
+    as real kwargs (num_experts, top_k, pretrain_epochs, lambda_independence,
+    use_ica_features_in_gate, lb_coef, ...), so we just forward `overrides`
+    directly. The previous monkey-patch shim was a no-op because the values
+    were hardcoded as locals inside apply_rnn_moe_filter_ica.
     """
     from src.models import ica_moe_original as M
 
-    saved = {}
-    for k, v in overrides.items():
-        if hasattr(M, k):
-            saved[k] = getattr(M, k)
-            setattr(M, k, v)
-    try:
-        if experiment_type == "eeg_eog":
-            return M.apply_rnn_moe_filter_ica_eog_only(
-                noisy, clean, eog, stds, means, seed=seed)
-        if experiment_type == "eeg_emg":
-            return M.apply_rnn_moe_filter_ica_emg_only(
-                noisy, clean, emg, stds, means, seed=seed)
-        return M.apply_rnn_moe_filter_ica(
-            noisy, clean, eog, emg, stds, means, seed=seed)
-    finally:
-        for k, v in saved.items():
-            setattr(M, k, v)
+    if experiment_type == "eeg_eog":
+        return M.apply_rnn_moe_filter_ica_eog_only(
+            noisy, clean, eog, stds, means, seed=seed, **overrides)
+    if experiment_type == "eeg_emg":
+        return M.apply_rnn_moe_filter_ica_emg_only(
+            noisy, clean, emg, stds, means, seed=seed, **overrides)
+    return M.apply_rnn_moe_filter_ica(
+        noisy, clean, eog, emg, stds, means, seed=seed, **overrides)
 
 
 def run_ablation(data: Dict[str, np.ndarray],

@@ -24,7 +24,18 @@ def apply_rnn_moe_filter_ica(noisy_eeg: np.ndarray,
                               eeg_stds: np.ndarray,
                               eeg_means: np.ndarray,
                               seed: int = 40,
-                              device=None) -> np.ndarray:
+                              device=None,
+                              # ---- ablation knobs (JBHI revision) ----
+                              num_experts: int = 4,
+                              top_k: int = 2,
+                              hidden_size: int = 128,
+                              pretrain_epochs: int = 5,
+                              main_epochs: int = 10,
+                              lb_coef: float = 0.01,
+                              lambda_independence: float = 0.1,
+                              use_ica_features_in_gate: bool = True,
+                              learning_rate: float = 1e-3,
+                              ) -> np.ndarray:
     """
     Apply Classical Recurrent Neural Network with Mixture of Experts (RNN-MoE) filter to EEG data.
     This version uses ICA-based self-learning pre-training for expert specialization.
@@ -36,6 +47,11 @@ def apply_rnn_moe_filter_ica(noisy_eeg: np.ndarray,
         sklearn FastICA recompute, which previously dominated training time on
         both M1 MPS and Colab T4).
 
+    Ablation knobs (JBHI revision):
+      All of num_experts/top_k/pretrain_epochs/lb_coef/lambda_independence/
+      use_ica_features_in_gate are exposed as kwargs so the ablation runner
+      can vary them per variant. Defaults reproduce the headline configuration.
+
     Args:
         noisy_eeg: Noisy EEG data.
         eeg_normalized: Normalized EEG data.
@@ -45,6 +61,9 @@ def apply_rnn_moe_filter_ica(noisy_eeg: np.ndarray,
         eeg_means: Means for denormalization.
         seed: Random seed for reproducibility (default: 40)
         device: torch.device or string ('cuda'|'mps'|'cpu'); None auto-detects.
+        num_experts, top_k, hidden_size, pretrain_epochs, main_epochs,
+        lb_coef, lambda_independence, use_ica_features_in_gate, learning_rate:
+            ablation knobs; see paper.
 
     Returns:
         Filtered EEG data (numpy on CPU, denormalized).
@@ -69,11 +88,12 @@ def apply_rnn_moe_filter_ica(noisy_eeg: np.ndarray,
             device = torch.device("cpu")
     elif isinstance(device, str):
         device = torch.device(device)
-    logging.info(f"SLA-MoE applier using device: {device}")
+    logging.info(f"SLA-MoE applier using device: {device}  "
+                 f"[E={num_experts}, k={top_k}, pretrain={pretrain_epochs}, "
+                 f"lb={lb_coef}, ind={lambda_independence}, "
+                 f"ica_gate={use_ica_features_in_gate}]")
 
-    hidden_size = 128
     sequence_length = noisy_eeg.shape[1]
-    num_experts = 4
 
     # Convert inputs to tensors and move to device
     noisy_eeg_tensor = torch.FloatTensor(noisy_eeg).to(device)
@@ -473,7 +493,9 @@ def apply_rnn_moe_filter_ica(noisy_eeg: np.ndarray,
 
                                 independence_loss += correlation
 
-                            loss = loss + 0.1 * independence_loss
+                            # `lambda_independence` comes from the enclosing
+                            # scope of apply_rnn_moe_filter_ica via closure.
+                            loss = loss + lambda_independence * independence_loss
 
                         loss.backward()
                         torch.nn.utils.clip_grad_norm_(expert.parameters(), max_norm=1.0)
@@ -504,7 +526,11 @@ def apply_rnn_moe_filter_ica(noisy_eeg: np.ndarray,
             )
 
             self.sparse_gate = True
-            self.top_k = 2
+            # top_k pulled from enclosing scope of apply_rnn_moe_filter_ica.
+            self.top_k = top_k
+            # If False, the gating network sees zeros instead of ICA features
+            # (ablation A4 in the paper).
+            self.use_ica_features_in_gate = use_ica_features_in_gate
 
         def compute_ica_features(self, signals, batch_indices=None):
             """
@@ -554,7 +580,11 @@ def apply_rnn_moe_filter_ica(noisy_eeg: np.ndarray,
         def forward(self, x, eog, emg, batch_indices=None):
             ica_features = self.compute_ica_features(x, batch_indices=batch_indices)
             basic_features = torch.stack([x, eog, emg], dim=-1)
-            gate_input = torch.cat([basic_features, ica_features], dim=-1)
+            # Ablation A4: zero out ICA features at the gating input if requested.
+            # The experts still receive ICA features (the ablation isolates the
+            # gate's reliance on ICA, not the experts').
+            gate_ica = ica_features if self.use_ica_features_in_gate else torch.zeros_like(ica_features)
+            gate_input = torch.cat([basic_features, gate_ica], dim=-1)
 
             gate_lstm_out, _ = self.gate_lstm(gate_input)
             gate_logits = self.gate_network(gate_lstm_out)
@@ -626,16 +656,19 @@ def apply_rnn_moe_filter_ica(noisy_eeg: np.ndarray,
 
     model = RNNMoEFilter(num_experts, pretrainer.ica_decomposer).to(device)
     pretrainer.experts = model.experts
-    pretrainer.pretrain(epochs=5, batch_size=32)
+    if pretrain_epochs > 0:
+        pretrainer.pretrain(epochs=pretrain_epochs, batch_size=32)
+    else:
+        logging.info("Pre-training skipped (pretrain_epochs=0).")
 
     # Main training phase
     criterion = nn.MSELoss()
-    optimizer = torch.optim.Adam(model.parameters(), lr=0.001)
+    optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate)
 
-    epochs = 10
+    epochs = main_epochs
     batch_size = 32
     n_batches = len(noisy_eeg) // batch_size
-    lb_coef = 0.01
+    # lb_coef and lambda_independence come from kwargs above (ablation knobs).
 
     scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=epochs)
 
@@ -706,7 +739,8 @@ def apply_rnn_moe_filter_ica_eog_only(noisy_eeg: np.ndarray,
                                        eeg_stds: np.ndarray,
                                        eeg_means: np.ndarray,
                                        seed: int = 40,
-                                       device=None) -> np.ndarray:
+                                       device=None,
+                                       **kwargs) -> np.ndarray:
     """
     Apply ICA-MoE filter for EEG+EOG denoising (no EMG).
 
@@ -726,7 +760,7 @@ def apply_rnn_moe_filter_ica_eog_only(noisy_eeg: np.ndarray,
 
     return apply_rnn_moe_filter_ica(
         noisy_eeg, eeg_normalized, eog_normalized, emg_normalized,
-        eeg_stds, eeg_means, seed, device=device,
+        eeg_stds, eeg_means, seed, device=device, **kwargs,
     )
 
 
@@ -736,7 +770,8 @@ def apply_rnn_moe_filter_ica_emg_only(noisy_eeg: np.ndarray,
                                        eeg_stds: np.ndarray,
                                        eeg_means: np.ndarray,
                                        seed: int = 40,
-                                       device=None) -> np.ndarray:
+                                       device=None,
+                                       **kwargs) -> np.ndarray:
     """
     Apply ICA-MoE filter for EEG+EMG denoising (no EOG).
 
@@ -756,5 +791,5 @@ def apply_rnn_moe_filter_ica_emg_only(noisy_eeg: np.ndarray,
 
     return apply_rnn_moe_filter_ica(
         noisy_eeg, eeg_normalized, eog_normalized, emg_normalized,
-        eeg_stds, eeg_means, seed, device=device,
+        eeg_stds, eeg_means, seed, device=device, **kwargs,
     )
