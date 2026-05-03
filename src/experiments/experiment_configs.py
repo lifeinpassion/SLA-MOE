@@ -112,6 +112,8 @@ EEG_EOG_EMG_CONFIG = ExperimentConfig(
     name="EEG_EOG_EMG",
     description="EEG denoising with both EOG and EMG artifact removal",
     noise_type="eog_emg",
+    seeds=[40,41,42,43,44],
+    n_folds=5,
     results_dir="results/eeg_eog_emg",
 )
 
