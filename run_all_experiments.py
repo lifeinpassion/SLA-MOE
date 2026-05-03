@@ -377,6 +377,10 @@ def main():
                         help="If given, run baselines only at this single SNR (SLA-MoE still "
                              "runs the full sweep). Use this to populate Table II at one SNR while "
                              "generating the SNR-sweep figure for SLA-MoE alone.")
+    parser.add_argument("--seeds", type=int, nargs="+", default=None,
+                        help="Override seed list, e.g. --seeds 40 41 42 43 44.")
+    parser.add_argument("--folds", type=int, default=None,
+                        help="Override n_folds (subject-grouped K-fold).")
     parser.add_argument("--device", choices=["auto", "cpu", "cuda", "mps"], default="auto")
     args = parser.parse_args()
 
@@ -399,10 +403,16 @@ def main():
     logger.info(f"Experiments to run: {list(experiment_configs)}")
     logger.info(f"Baselines: {list(baseline_cfgs) if baseline_cfgs else 'NONE (skipped)'}")
 
-    # Optional single-SNR override
+    # Optional overrides from CLI
     if args.snr is not None:
         for cfg in experiment_configs.values():
             cfg.snr_sweep_db = [args.snr]
+    if args.seeds is not None:
+        for cfg in experiment_configs.values():
+            cfg.seeds = list(args.seeds)
+    if args.folds is not None:
+        for cfg in experiment_configs.values():
+            cfg.n_folds = int(args.folds)
 
     # Load data
     data = load_or_generate_data(args.data_path)
