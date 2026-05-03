@@ -139,10 +139,28 @@ def run_ablation(data: Dict[str, np.ndarray],
                                    default=lambda x: float(x) if isinstance(x, (np.floating, np.integer)) else x))
 
     # Build per-variant per-metric arrays for stats vs Full SLA-MoE.
+    # CRITICAL: paired Wilcoxon requires aligned observations, so we align by
+    # (seed, fold) keys. If any variant lost folds (e.g. OOM on E=8), we
+    # restrict ALL variants to the intersection of successful (seed, fold)
+    # combinations. This keeps every paired test on equal footing.
+    all_keys = None
+    for v, runs in results.items():
+        keys = {(r.get("seed"), r.get("fold")) for r in runs if "rmse" in r}
+        all_keys = keys if all_keys is None else (all_keys & keys)
+    if all_keys is None:
+        all_keys = set()
+    sorted_keys = sorted(all_keys)
+    logging.info(f"Stats alignment: {len(sorted_keys)} (seed, fold) keys "
+                 f"common to all {len(results)} variants.")
+
     per_variant: Dict[str, Dict[str, List[float]]] = {}
     for v, runs in results.items():
-        per_variant[v] = {m: [r[m] for r in runs if m in r and np.isfinite(r[m])]
-                          for m in METRIC_ORDER}
+        by_key = {(r.get("seed"), r.get("fold")): r for r in runs}
+        per_variant[v] = {
+            m: [by_key[k][m] for k in sorted_keys
+                if k in by_key and m in by_key[k] and np.isfinite(by_key[k][m])]
+            for m in METRIC_ORDER
+        }
 
     if "Full SLA-MoE" in per_variant and per_variant["Full SLA-MoE"]["rmse"]:
         stats = compare_to_reference(per_variant, reference="Full SLA-MoE", metrics=METRIC_ORDER)
