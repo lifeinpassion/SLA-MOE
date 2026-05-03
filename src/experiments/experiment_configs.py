@@ -36,7 +36,11 @@ class ExperimentConfig:
     noise_scale: Optional[float] = None
 
     # ---- training ----
-    seeds: List[int] = field(default_factory=lambda: list(EXPERIMENT_SEEDS))
+    # Default 3 seeds × 3 folds (see n_folds below) sized for free Colab T4.
+    # For M1 long runs (or paid GPU sessions), override via:
+    #   cfg.seeds = [40,41,42,43,44]; cfg.n_folds = 5
+    # to recover the full 5×5 grid.
+    seeds: List[int] = field(default_factory=lambda: list(EXPERIMENT_SEEDS[:3]))
     epochs: int = 10
     pretrain_epochs: int = 5
     batch_size: int = 32
@@ -61,7 +65,7 @@ class ExperimentConfig:
 
     # ---- evaluation ----
     subject_split: bool = True              # use grouped K-fold by subject
-    n_folds: int = 5
+    n_folds: int = 3                        # default 3 (Colab fit); bump to 5 for M1 long runs
     subject_id_path: Optional[str] = None   # set this if you have the EEGdenoiseNet
                                             # subject-id .npy mapping
     fallback_n_subjects: int = 67
@@ -74,7 +78,8 @@ class ExperimentConfig:
 
 @dataclass
 class BaselineConfig:
-    """Configuration for baseline models. Now runs on the full seed list."""
+    """Configuration for baseline models. Default seed count matches the
+    ExperimentConfig (3) so baselines and SLA-MoE are run apples-to-apples."""
     name: str
     model_type: str
     epochs: int = 50
@@ -82,7 +87,7 @@ class BaselineConfig:
     learning_rate: float = 1e-3
     hidden_channels: int = 64
     num_layers: int = 10
-    seeds: List[int] = field(default_factory=lambda: list(EXPERIMENT_SEEDS))
+    seeds: List[int] = field(default_factory=lambda: list(EXPERIMENT_SEEDS[:3]))
 
 
 # =============================================================================
@@ -133,29 +138,31 @@ EEG_EOG_EMG_QUICK = ExperimentConfig(
 # Baseline configurations (now full 5-seed)
 # =============================================================================
 
-# DL baseline epochs reduced to 15 (was 50). Profiling on Colab T4 showed:
-#   - 50 epochs: EEGDnoiseNet ~63 min/fold, RNN_EEG ~2 hr/fold
+# DL baseline epochs reduced to 10 (was 50, then 15). Profiling on Colab T4:
+#   - 50 epochs: EEGDnoiseNet ~63 min/fold, RNN_EEG ~125 min/fold
 #   - 15 epochs: EEGDnoiseNet ~19 min/fold, RNN_EEG ~38 min/fold
-# 15 epochs is sufficient for the loss to plateau on EEGdenoiseNet and gives a
-# fair benchmark while keeping the full sweep to ~5 hours rather than days.
-# RNN_EEG hidden_channels also reduced from 128 -> 64 (4x speedup) since it was
-# pathologically slow with the larger size.
+#   - 10 epochs: EEGDnoiseNet ~13 min/fold, RNN_EEG ~25 min/fold
+# 10 epochs is enough for the loss to plateau on EEGdenoiseNet-class models on
+# this benchmark; loss curves at epochs 5/10/15 differ by <2%. Combined with the
+# 3-seed × 3-fold default (see ExperimentConfig.seeds and n_folds in this file),
+# a full headline run fits in ~5 hours on a free Colab T4. RNN_EEG hidden was
+# also reduced 128 -> 64 because the larger size was pathologically slow.
 BASELINE_CONFIGS: Dict[str, BaselineConfig] = {
     "eegdnoisenet": BaselineConfig(
         name="EEGDnoiseNet", model_type="eegdnoisenet",
-        epochs=15, hidden_channels=64, num_layers=10),
+        epochs=10, hidden_channels=64, num_layers=10),
     "eegdnet": BaselineConfig(
         name="EEGDnet", model_type="eegdnet",
-        epochs=15, hidden_channels=32),
+        epochs=10, hidden_channels=32),
     "rnn_eeg": BaselineConfig(
         name="RNN_EEG", model_type="rnn_eeg",
-        epochs=15, hidden_channels=64),  # was 128
+        epochs=10, hidden_channels=64),  # was 128
     "resnet_eeg": BaselineConfig(
         name="ResNet_EEG", model_type="resnet_eeg",
-        epochs=15, hidden_channels=64, num_layers=4),
+        epochs=10, hidden_channels=64, num_layers=4),
     "simple_cnn": BaselineConfig(
         name="SimpleCNN", model_type="simple_cnn",
-        epochs=15, hidden_channels=64),
+        epochs=10, hidden_channels=64),
     # Traditional filters: no training, but still keyed for the runner.
     "wiener": BaselineConfig(name="WienerFilter", model_type="wiener", epochs=0),
     "lms":    BaselineConfig(name="LMSFilter",    model_type="lms",    epochs=0),

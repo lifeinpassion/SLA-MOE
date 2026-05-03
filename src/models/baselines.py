@@ -148,17 +148,23 @@ class EEGDnet(nn.Module):
         )
 
         # Decoder
+        # Each dec_N block receives torch.cat([d_N, e_N], dim=1), so its input
+        # channels MUST equal `up_N.out_channels + enc_N.out_channels`. The
+        # original code had these mismatched on dec4/dec3/dec2 (off by a factor
+        # that depended on the encoder's deeper width); the runtime error
+        # surfaces as "Given groups=1, weight of size [...], expected input to
+        # have N channels, but got M instead."
         self.up4 = nn.ConvTranspose1d(base_channels * 8, base_channels * 4, kernel_size=2, stride=2)
-        self.dec4 = self._conv_block(base_channels * 8, base_channels * 4)
+        self.dec4 = self._conv_block(base_channels * 4 + base_channels * 8, base_channels * 4)
 
         self.up3 = nn.ConvTranspose1d(base_channels * 4, base_channels * 2, kernel_size=2, stride=2)
-        self.dec3 = self._conv_block(base_channels * 4, base_channels * 2)
+        self.dec3 = self._conv_block(base_channels * 2 + base_channels * 4, base_channels * 2)
 
         self.up2 = nn.ConvTranspose1d(base_channels * 2, base_channels, kernel_size=2, stride=2)
-        self.dec2 = self._conv_block(base_channels * 2, base_channels)
+        self.dec2 = self._conv_block(base_channels + base_channels * 2, base_channels)
 
         self.up1 = nn.ConvTranspose1d(base_channels, base_channels, kernel_size=2, stride=2)
-        self.dec1 = self._conv_block(base_channels * 2, base_channels)
+        self.dec1 = self._conv_block(base_channels * 2, base_channels)  # already correct: 1+1
 
         # Output
         self.output = nn.Conv1d(base_channels, 1, kernel_size=1)
