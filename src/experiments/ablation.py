@@ -139,28 +139,34 @@ def run_ablation(data: Dict[str, np.ndarray],
                                    default=lambda x: float(x) if isinstance(x, (np.floating, np.integer)) else x))
 
     # Build per-variant per-metric arrays for stats vs Full SLA-MoE.
-    # CRITICAL: paired Wilcoxon requires aligned observations, so we align by
-    # (seed, fold) keys. If any variant lost folds (e.g. OOM on E=8), we
-    # restrict ALL variants to the intersection of successful (seed, fold)
-    # combinations. This keeps every paired test on equal footing.
+    # CRITICAL: paired Wilcoxon requires aligned observations. Align in two
+    # steps: (1) take the (seed, fold) intersection across all variants;
+    # (2) PER METRIC, drop any key where any variant has NaN/Inf for that
+    # metric. Different metrics may end up with different n.
+    by_variant_key = {
+        v: {(r.get("seed"), r.get("fold")): r for r in runs}
+        for v, runs in results.items()
+    }
     all_keys = None
-    for v, runs in results.items():
-        keys = {(r.get("seed"), r.get("fold")) for r in runs if "rmse" in r}
+    for v, by_key in by_variant_key.items():
+        keys = set(by_key.keys())
         all_keys = keys if all_keys is None else (all_keys & keys)
     if all_keys is None:
         all_keys = set()
-    sorted_keys = sorted(all_keys)
-    logging.info(f"Stats alignment: {len(sorted_keys)} (seed, fold) keys "
-                 f"common to all {len(results)} variants.")
+    logging.info(f"Stats alignment: (seed,fold) intersection = {len(all_keys)} keys.")
 
-    per_variant: Dict[str, Dict[str, List[float]]] = {}
-    for v, runs in results.items():
-        by_key = {(r.get("seed"), r.get("fold")): r for r in runs}
-        per_variant[v] = {
-            m: [by_key[k][m] for k in sorted_keys
-                if k in by_key and m in by_key[k] and np.isfinite(by_key[k][m])]
-            for m in METRIC_ORDER
-        }
+    per_variant: Dict[str, Dict[str, List[float]]] = {v: {} for v in by_variant_key}
+    for m in METRIC_ORDER:
+        good_keys = sorted(
+            k for k in all_keys
+            if all(
+                m in by_variant_key[v].get(k, {})
+                and np.isfinite(by_variant_key[v][k][m])
+                for v in by_variant_key
+            )
+        )
+        for v, by_key in by_variant_key.items():
+            per_variant[v][m] = [by_key[k][m] for k in good_keys]
 
     if "Full SLA-MoE" in per_variant and per_variant["Full SLA-MoE"]["rmse"]:
         stats = compare_to_reference(per_variant, reference="Full SLA-MoE", metrics=METRIC_ORDER)

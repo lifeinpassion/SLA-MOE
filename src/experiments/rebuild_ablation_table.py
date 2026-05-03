@@ -39,29 +39,48 @@ def main():
     with open(args.raw) as f:
         results: Dict[str, List[Dict]] = json.load(f)
 
-    # Align by (seed, fold) keys -- intersection across all variants.
+    # Build per-variant key->record maps once.
+    by_variant_key = {
+        v: {(r.get("seed"), r.get("fold")): r for r in runs}
+        for v, runs in results.items()
+    }
+
+    # Step 1: find the (seed, fold) intersection across all variants.
     all_keys = None
-    for v, runs in results.items():
-        keys = {(r.get("seed"), r.get("fold")) for r in runs if "rmse" in r}
+    for v, by_key in by_variant_key.items():
+        keys = set(by_key.keys())
         all_keys = keys if all_keys is None else (all_keys & keys)
     if all_keys is None:
         all_keys = set()
-    sorted_keys = sorted(all_keys)
-    logging.info(f"Aligned on {len(sorted_keys)} (seed, fold) keys "
-                 f"across {len(results)} variants.")
-    # Per-variant n
-    for v, runs in results.items():
-        n_v = len({(r.get("seed"), r.get("fold")) for r in runs if "rmse" in r})
-        logging.info(f"  {v}: raw n={n_v}, aligned n={len(sorted_keys)}")
+    logging.info(f"(seed, fold) intersection across {len(results)} variants: "
+                 f"{len(all_keys)} keys.")
+    for v, by_key in by_variant_key.items():
+        logging.info(f"  {v}: raw n={len(by_key)}")
 
-    per_variant: Dict[str, Dict[str, List[float]]] = {}
-    for v, runs in results.items():
-        by_key = {(r.get("seed"), r.get("fold")): r for r in runs}
-        per_variant[v] = {
-            m: [by_key[k][m] for k in sorted_keys
-                if k in by_key and m in by_key[k] and np.isfinite(by_key[k][m])]
-            for m in METRIC_ORDER
-        }
+    # Step 2: PER METRIC, restrict to keys where EVERY variant has a finite
+    # value. This guarantees aligned arrays for every paired Wilcoxon. Keys
+    # with NaN/Inf metrics in any variant are dropped for that metric only.
+    per_variant: Dict[str, Dict[str, List[float]]] = {v: {} for v in by_variant_key}
+    for m in METRIC_ORDER:
+        good_keys = sorted(
+            k for k in all_keys
+            if all(
+                m in by_variant_key[v].get(k, {})
+                and np.isfinite(by_variant_key[v][k][m])
+                for v in by_variant_key
+            )
+        )
+        if not good_keys:
+            logging.warning(f"  metric {m}: no aligned keys with all-finite values; skipping.")
+            for v in by_variant_key:
+                per_variant[v][m] = []
+            continue
+        n_drop = len(all_keys) - len(good_keys)
+        if n_drop:
+            logging.info(f"  metric {m}: keeping {len(good_keys)}/{len(all_keys)} keys "
+                         f"({n_drop} dropped due to non-finite values in some variant).")
+        for v, by_key in by_variant_key.items():
+            per_variant[v][m] = [by_key[k][m] for k in good_keys]
 
     if REFERENCE not in per_variant or not per_variant[REFERENCE]["rmse"]:
         raise SystemExit(f"No reference data for '{REFERENCE}'.")
