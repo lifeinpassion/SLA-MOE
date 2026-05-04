@@ -339,10 +339,15 @@ def main():
     from src.models.ica_moe_original import apply_rnn_moe_filter_ica
 
     def sla_moe_denoiser(signal_2d: np.ndarray, seed: int) -> np.ndarray:
-        # Single-channel: feed dummy zeros for EOG/EMG references
+        # Single-channel input shape: (n_trials, n_samples).
+        # The applier denormalizes via `out * stds + means` where stds/means
+        # are broadcast across the trial dimension, so they must have shape
+        # (n_samples,) -- not (n_trials,). The previous version had this
+        # transposed and produced a broadcasting error.
         zeros = np.zeros_like(signal_2d)
-        stds = np.ones(signal_2d.shape[0])
-        means = np.zeros(signal_2d.shape[0])
+        n_samples = signal_2d.shape[1]
+        stds = np.ones(n_samples)
+        means = np.zeros(n_samples)
         return apply_rnn_moe_filter_ica(
             signal_2d, signal_2d, zeros, zeros, stds, means, seed=seed)
 
