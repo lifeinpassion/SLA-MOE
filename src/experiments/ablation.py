@@ -56,6 +56,11 @@ ABLATION_VARIANTS: Dict[str, Dict[str, Any]] = {
     "No ICA pretraining":          {"pretrain_epochs": 0},
     "No independence loss":        {"lambda_independence": 0.0},
     "No ICA features at gate":     {"use_ica_features_in_gate": False},
+    # Self-supervised pre-training: each expert is trained on a target
+    # derived purely from x and the ICA decomposition, with no clean signal
+    # leaked into the targets. The ICA-guided routing of experts to subspaces
+    # is preserved; only the supervised "blend with s" is removed.
+    "Self-supervised targets":     {"use_clean_signal_in_targets": False},
     "E=2":                         {"num_experts": 2},
     "E=6":                         {"num_experts": 6},
     "E=8":                         {"num_experts": 8},

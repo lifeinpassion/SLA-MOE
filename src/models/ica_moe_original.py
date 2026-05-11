@@ -34,6 +34,7 @@ def apply_rnn_moe_filter_ica(noisy_eeg: np.ndarray,
                               lb_coef: float = 0.01,
                               lambda_independence: float = 0.1,
                               use_ica_features_in_gate: bool = True,
+                              use_clean_signal_in_targets: bool = True,
                               learning_rate: float = 1e-3,
                               ) -> np.ndarray:
     """
@@ -91,7 +92,8 @@ def apply_rnn_moe_filter_ica(noisy_eeg: np.ndarray,
     logging.info(f"SLA-MoE applier using device: {device}  "
                  f"[E={num_experts}, k={top_k}, pretrain={pretrain_epochs}, "
                  f"lb={lb_coef}, ind={lambda_independence}, "
-                 f"ica_gate={use_ica_features_in_gate}]")
+                 f"ica_gate={use_ica_features_in_gate}, "
+                 f"clean_in_targets={use_clean_signal_in_targets}]")
 
     sequence_length = noisy_eeg.shape[1]
 
@@ -374,6 +376,17 @@ def apply_rnn_moe_filter_ica(noisy_eeg: np.ndarray,
             return ica_features
 
         def create_ica_based_targets(self, batch_noisy, batch_clean, expert_id):
+            """
+            Construct per-expert pre-training targets.
+
+            When `use_clean_signal_in_targets` is True (default, supervised
+            mode), each target blends the ground-truth clean signal `s` with
+            an ICA-subspace reconstruction of the noisy input `x`. When
+            False, the target is constructed PURELY from `x` and the ICA
+            decomposition (truly self-supervised: no clean labels used).
+            The `use_clean_signal_in_targets` flag is read from the
+            enclosing scope of apply_rnn_moe_filter_ica via closure.
+            """
             batch_size, seq_len = batch_noisy.shape
             targets = []
 
@@ -382,8 +395,12 @@ def apply_rnn_moe_filter_ica(noisy_eeg: np.ndarray,
                 clean_signal = batch_clean[i]
 
                 if not self.ica_decomposer.fitted:
-                    noise_estimate = noisy_signal - clean_signal
-                    target = clean_signal + 0.1 * torch.randn_like(clean_signal) * torch.std(noise_estimate)
+                    if use_clean_signal_in_targets:
+                        noise_estimate = noisy_signal - clean_signal
+                        target = clean_signal + 0.1 * torch.randn_like(clean_signal) * torch.std(noise_estimate)
+                    else:
+                        # Self-supervised fallback: just use noisy signal as target
+                        target = noisy_signal
                 else:
                     if expert_id == 0:
                         low_freq_components = []
@@ -396,7 +413,12 @@ def apply_rnn_moe_filter_ica(noisy_eeg: np.ndarray,
                         else:
                             reconstructed = self.ica_decomposer.reconstruct_component(noisy_signal, [0])
 
-                        target = 0.7 * clean_signal + 0.3 * reconstructed
+                        if use_clean_signal_in_targets:
+                            target = 0.7 * clean_signal + 0.3 * reconstructed
+                        else:
+                            # Self-supervised: the low-frequency subspace of x
+                            # is itself the target (no clean signal mixed in).
+                            target = reconstructed
 
                     elif expert_id == 1:
                         high_freq_components = []
@@ -410,7 +432,12 @@ def apply_rnn_moe_filter_ica(noisy_eeg: np.ndarray,
                             reconstructed = self.ica_decomposer.reconstruct_component(noisy_signal, [1, 2])
 
                         high_freq_artifacts = noisy_signal - reconstructed
-                        target = clean_signal - 0.3 * high_freq_artifacts
+                        if use_clean_signal_in_targets:
+                            target = clean_signal - 0.3 * high_freq_artifacts
+                        else:
+                            # Self-supervised: noisy signal minus a fraction
+                            # of its high-frequency content.
+                            target = noisy_signal - 0.3 * high_freq_artifacts
 
                     elif expert_id == 2:
                         non_gaussian_components = []
@@ -420,10 +447,19 @@ def apply_rnn_moe_filter_ica(noisy_eeg: np.ndarray,
 
                         if non_gaussian_components:
                             artifact_estimate = self.ica_decomposer.reconstruct_component(noisy_signal, non_gaussian_components)
-                            target = clean_signal - 0.2 * (artifact_estimate - torch.mean(artifact_estimate))
+                            if use_clean_signal_in_targets:
+                                target = clean_signal - 0.2 * (artifact_estimate - torch.mean(artifact_estimate))
+                            else:
+                                # Self-supervised: noisy signal with the
+                                # non-Gaussian (artifact-like) component
+                                # mean-centred and subtracted.
+                                target = noisy_signal - 0.2 * (artifact_estimate - torch.mean(artifact_estimate))
                         else:
                             reconstructed = self.ica_decomposer.reconstruct_component(noisy_signal, [1, 2])
-                            target = 0.5 * clean_signal + 0.5 * reconstructed
+                            if use_clean_signal_in_targets:
+                                target = 0.5 * clean_signal + 0.5 * reconstructed
+                            else:
+                                target = 0.5 * noisy_signal + 0.5 * reconstructed
 
                     else:
                         all_components = []
@@ -441,7 +477,15 @@ def apply_rnn_moe_filter_ica(noisy_eeg: np.ndarray,
                             comp_reconstructed = self.ica_decomposer.reconstruct_component(noisy_signal, [comp_idx])
                             reconstructed += weight * comp_reconstructed
 
-                        target = 0.8 * clean_signal + 0.2 * reconstructed
+                        if use_clean_signal_in_targets:
+                            target = 0.8 * clean_signal + 0.2 * reconstructed
+                        else:
+                            # Self-supervised: weighted mix of all
+                            # ICA-component reconstructions of x, where the
+                            # weights are inversely proportional to
+                            # non-Gaussianity (so the "more Gaussian"
+                            # components dominate).
+                            target = reconstructed
 
                 targets.append(target)
 
